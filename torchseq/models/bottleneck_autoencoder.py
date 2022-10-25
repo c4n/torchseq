@@ -138,8 +138,28 @@ class BottleneckAutoencoderModel(nn.Module):
                 forced_codes=batch.get("forced_codes", None),
                 residual_mask=batch.get("residual_mask", None),
             )
-
+            
             prebn_encoding_pooled = memory["encoding_pooled"]
+
+            ## my own addition
+            if tgt_field!= None:
+                tgt_memory = {}
+                tgt_encoding, tgt_memory = self.seq_encoder(
+                    batch[tgt_field],
+                    batch[tgt_field + "_len"],
+                    tgt_memory,
+                    include_position=self.config.encoder.get("position_embeddings", True),
+                )
+
+                tgt_encoding_pooled, tgt_memory = self.bottleneck(
+                    tgt_encoding,
+                    tgt_memory,
+                    batch["_global_step"],
+                    head_mask=batch.get("head_mask", None),
+                    forced_codes=batch.get("forced_codes", None),
+                    residual_mask=batch.get("residual_mask", None),
+                )
+                tgt_prebn_encoding_pooled = tgt_memory["encoding_pooled"]
 
             if self.config.bottleneck.get(
                 "code_predictor", None
@@ -253,6 +273,7 @@ class BottleneckAutoencoderModel(nn.Module):
                         ],
                         dim=2,
                     )
+                   
                     templ_prebn_enc = template_memory["encoding_pooled"][:, :1, self.sep_splice_ix :].expand(
                         -1, prebn_encoding_pooled.shape[1], -1
                     )
@@ -320,25 +341,44 @@ class BottleneckAutoencoderModel(nn.Module):
                         )
 
                 if self.config.bottleneck.get("separation_loss_weight", 0) > 0:
+                    cos = torch.nn.CosineSimilarity(dim=2, eps=1e-08)
+                    relu =  nn.ReLU()
+                    margin = 0.1
                     if "loss" not in memory:
                         memory["loss"] = 0
 
                     # TODO: there must be a cleaner way of flipping the tensor ranges here...
                     if self.config.bottleneck.get("cos_separation_loss", True):
-                        diff1 = cos_sim(
-                            encoding_pooled[:, :, self.sep_splice_ix :],
-                            template_encoding_pooled[:, :, self.sep_splice_ix :],
-                        )
-                        diff2 = cos_sim(
+                        # input vs template
+                        it_diff_sem = relu(cos(
                             encoding_pooled[:, :, : self.sep_splice_ix],
                             template_encoding_pooled[:, :, : self.sep_splice_ix],
-                        )
-                        if self.config.bottleneck.get("flip_separation_loss", False):
-                            similarity_loss = 1 - 1 * diff1.mean(dim=-1).mean(dim=-1)
-                            dissimilarity_loss = 1 + 1 * diff2.mean(dim=-1).mean(dim=-1)
-                        else:
-                            similarity_loss = 1 - 1 * diff2.mean(dim=-1).mean(dim=-1)
-                            dissimilarity_loss = 1 + 1 * diff1.mean(dim=-1).mean(dim=-1)
+                        )-margin).mean()
+                        it_diff_syn = relu(cos(
+                            encoding_pooled[:, :, self.sep_splice_ix :],
+                            template_encoding_pooled[:, :, self.sep_splice_ix :],
+                        )-margin).mean()
+                         # input vs target
+                        itgt_diff_sem = (1.0-cos(
+                            encoding_pooled[:, :, : self.sep_splice_ix],
+                            tgt_encoding_pooled[:, :, : self.sep_splice_ix],
+                        )).mean()
+                        itgt_diff_syn = relu(cos(
+                            encoding_pooled[:, :, self.sep_splice_ix :],
+                            tgt_encoding_pooled[:, :, self.sep_splice_ix :],
+                        )-margin).mean()
+                          # target vs template
+                        tgtt_diff_sem = relu(cos(
+                            tgt_encoding_pooled[:, :, : self.sep_splice_ix],
+                            template_encoding_pooled[:, :, : self.sep_splice_ix],
+                        )-margin).mean()
+                        tgtt_diff_syn = (1.0-cos(
+                            tgt_encoding_pooled[:, :, self.sep_splice_ix :],
+                            template_encoding_pooled[:, :, self.sep_splice_ix :],
+                        )).mean()
+                        similarity_loss = itgt_diff_sem + tgtt_diff_syn
+                        dissimilarity_loss = 0.0
+                        # dissimilarity_loss = it_diff_sem + it_diff_syn + itgt_diff_syn + tgtt_diff_sem
                     else:
                         if self.config.bottleneck.get("flip_separation_loss", False):
                             diff1 = (
@@ -365,8 +405,7 @@ class BottleneckAutoencoderModel(nn.Module):
                             )
                             dissimilarity_loss = torch.log(1 + 1 / (1e-2 + (diff2) ** 2)).mean(dim=-1).mean(dim=-1)
 
-                        similarity_loss *= 10
-
+                        # similarity_loss *= 10
                     separation_loss = (similarity_loss + dissimilarity_loss) * self.config.bottleneck.get(
                         "separation_loss_weight", 0
                     )
@@ -376,7 +415,7 @@ class BottleneckAutoencoderModel(nn.Module):
                         Logger().log_scalar("bottleneck/dissim_loss", dissimilarity_loss.mean(), batch["_global_step"])
 
                     memory["loss"] += separation_loss
-
+           
             memory["encoding"] = encoding_pooled
             memory["encoding_mask"] = None
 
@@ -397,3 +436,27 @@ class BottleneckAutoencoderModel(nn.Module):
         logits, memory = self.seq_decoder(output, memory)
 
         return logits, memory
+
+
+    def forward_encoded_vector(self, batch, output, memory=None, tgt_field=None):
+        if memory is None:
+            memory = {}
+
+
+        encoding, memory = self.seq_encoder(
+            batch[self.src_field],
+            batch[self.src_field + "_len"],
+            memory,
+            include_position=self.config.encoder.get("position_embeddings", True),
+        )
+
+        encoding_pooled, memory = self.bottleneck(
+            encoding,
+            memory,
+            batch["_global_step"],
+            head_mask=batch.get("head_mask", None),
+            forced_codes=batch.get("forced_codes", None),
+            residual_mask=batch.get("residual_mask", None),
+        )
+
+        return encoding_pooled

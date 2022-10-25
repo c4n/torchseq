@@ -41,6 +41,7 @@ from torchseq.metric_hooks.hrq_agg import HRQAggregationMetricHook
 from torchseq.metric_hooks.rouge import RougeMetricHook
 from torchseq.metric_hooks.semparse import SemanticParsingMetricHook
 
+from torchseq.models.samplers.get_vec import GetVecSampler
 
 # Variable length sequences = worse performance if we try to optimise
 from torch.backends import cudnn
@@ -207,6 +208,8 @@ class ModelAgent(BaseAgent):
         self.decode_dbs = DiverseBeamSearchSampler(self.config, self.output_tokenizer, self.device)
         self.decode_teacher_force = TeacherForcedSampler(self.config, self.output_tokenizer, self.device)
         self.decode_nucleus = ParallelNucleusSampler(self.config, self.output_tokenizer, self.device)
+        ### get vec
+        self.get_vec = GetVecSampler(self.config, self.output_tokenizer, self.device)
 
         if self.config.data.get("reranker", None) is not None:
             if self.config.reranker.data.get("strategy", None) == "qa":
@@ -812,3 +815,53 @@ class ModelAgent(BaseAgent):
                 self.current_epoch / self.config.training.num_epochs * 100,
                 "-",
             )
+
+
+    def get_vector(self, data_loader, memory_keys_to_return=None, metric_hooks=[], use_test=False, training_loop=False):
+        """
+        Get that vector
+        """
+        test_loss = 0
+        pred_output = []
+        gold_output = []
+        gold_input = []  # needed for SARI
+        
+        all_pooled = []
+
+        memory_values_to_return = defaultdict(lambda: [])
+
+        self.vq_codes = defaultdict(lambda: [])
+
+        self.model.eval()
+
+        for hook in metric_hooks:
+            hook.on_begin_epoch(use_test)
+
+        with torch.no_grad():
+            num_samples = 0
+            for batch_idx, batch in enumerate(
+                tqdm(data_loader, desc="Validating after {:} epochs".format(self.current_epoch), disable=self.silent)
+            ):
+                batch = {k: (v.to(self.device) if k[-5:] != "_text" and k[0] != "_" else v) for k, v in batch.items()}
+
+                curr_batch_size = batch[[k for k in batch.keys() if k[-5:] != "_text"][0]].size()[0]
+
+                encoding_pooled = self.step_getvec(batch)
+                all_pooled.append(encoding_pooled)
+
+
+        return all_pooled
+
+    def step_getvec(self, batch):
+        """
+        Perform a single inference step
+        """
+
+        batch["_global_step"] = self.global_step
+
+
+        encoding_pooled = self.get_vec(self.model, batch, self.tgt_field)
+
+        return encoding_pooled
+
+   
