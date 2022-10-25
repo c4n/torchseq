@@ -116,10 +116,10 @@ if __name__ == "__main__":
         'A black Honda motorcycle parked in front of a garage.',
         'A black Honda motorcycle parked in front of a garage.',]
     # pre-processing 
-    output_instance = batch_proc(input_instance, device='cuda')
+    output_instances = batch_proc(input_instance, device='cuda')
     # show results
     [print(f"Key: {k:10s} \tValues: {v[0][:10]} ") # only value from index zero
-               for k,v in output_instance.items()];
+               for k,v in output_instances.items()];
 
 
     ################################################################################
@@ -137,5 +137,5 @@ if __name__ == "__main__":
 
     #### Todo ####
     pdb.set_trace()
-    encoding_pooled_list = model.get_instance_vector({"_text":output_instance})
+    encoding_pooled_list = model.get_instance_vector(output_instances)
     print(encoding_pooled_list)
