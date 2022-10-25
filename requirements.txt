@@ -15,7 +15,7 @@ opentsne
 sentencepiece==0.1.95
 pydantic==1.9.1
 
-matplotlib
+matplotlib==3.5.3
 
 wandb==0.12.21
 protobuf<4
