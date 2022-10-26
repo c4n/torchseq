@@ -3,6 +3,7 @@ import json
 import torch
 import jsonlines
 import sacrebleu
+import torch.nn.functional as F
 from collections import defaultdict
 
 # Load config library
@@ -39,7 +40,8 @@ def load_dataset(config, path_data):
 
 
 class InstanceProcessing:
-    def __init__(self, config, path_vocab) -> None:
+    def __init__(self, model, config, path_vocab, device) -> None:
+        self.device = device
         self.tok_window = config.prepro.tok_window
         self.fields = config.json_dataset.data["field_map"]
         self.input_tokenizer = Tokenizer(config.prepro.get_first(["input_tokenizer", "tokenizer"]), path_vocab)
@@ -47,18 +49,46 @@ class InstanceProcessing:
         self.include_lang_codes = config.prepro.data.get("include_lang_codes", False)
         self.drop_target_lang_codes = config.prepro.data.get("drop_target_lang_codes", False)
         self.mask_prob = config.prepro.data.get("token_mask_prob", 0)
-    
+        self.pad_id = self.input_tokenizer.pad_id
+        self.model = model
 
-    def __call__(self, data, device):
-        batch = defaultdict(lambda: [])
+    def __call__(self, data):
+        batch = []
         for index, instance in enumerate(data):
             instance = self._instance_input(instance)
+            temp_feature = {}
             for key, val in instance.items():
-                batch[key].append(val)
-        batch = {key:self._preproc(key, val, device) 
-            for key,val in batch.items()}
-        return batch
+                val = self._preproc(key, val)
+                temp_feature[key] = val
+            batch.append(temp_feature)
+        
+        batch_input = self._pad_and_order_sequences(batch)
+        output = self.model.get_vector_batch(batch_input)
+        return output.squeeze(dim=1)
 
+    def _pad_and_order_sequences(self, batch):
+        keys = batch[0].keys()
+        max_lens = {k: max(len(x[k]) for x in batch) for k in keys}
+        for x in batch:
+            for k in keys:
+                if k[0] == "_":
+                    continue
+                if k == "a_pos":
+                    x[k] = F.pad(x[k], (0, max_lens[k] - len(x[k])), value=0)
+                elif k[-5:] != "_text":
+                    x[k] = F.pad(x[k], (0, max_lens[k] - len(x[k])), value=self.pad_id)
+
+        tensor_batch = {}
+        for k in keys:
+            if k[-5:] != "_text" and k[0] != "_":
+                tensor_batch[k] = torch.stack([x[k] for x in batch], 0)
+                if k[-4:] == "_len":
+                    tensor_batch[k] = tensor_batch[k].squeeze(dim=1)
+            else:
+                tensor_batch[k] = [x[k] for x in batch]
+        return tensor_batch
+
+    
     def _instance_input(self, tokens):
         """ 
         Input: 
@@ -85,45 +115,24 @@ class InstanceProcessing:
             include_lang_codes=self.include_lang_codes,
             drop_target_lang_codes=self.drop_target_lang_codes,
             mask_prob=self.mask_prob)
-            
         return output
 
-    def _preproc(self, key, val, device="cuda"):
+    def _preproc(self, key, val):
         if key[-5:] != "_text" and key[0] != "_":
-            val = torch.stack(val)
-            val = val.to(device)
+            val = val.to(self.device)
         return (val)
 
 
 if __name__ == "__main__":
         
+    device = 'cuda'
     PATH_DATA = '../data/'
     PATH_PRETRAINED = "../data/"
     PATH_CHECKPOINT = '../runs/vae/20220920_232720_paraphrasing_vae_mscoco_789'
 
     # Load config
     config = load_model_config(PATH_CHECKPOINT + '/config.json')
-    # Create args and load data based on the config 
-    data = load_dataset(config, PATH_DATA)
 
-
-    ################################################################################
-    ############################ Batch input features ##############################
-    batch_proc = InstanceProcessing(config, PATH_PRETRAINED)
-
-    # Batch input: list of text
-    input_instance = [
-        'A black Honda motorcycle parked in front of a garage.',
-        'A black Honda motorcycle parked in front of a garage.',]
-    # pre-processing 
-    output_instances = batch_proc(input_instance, device='cuda')
-    # show results
-    [print(f"Key: {k:10s} \tValues: {v[0][:10]} ") # only value from index zero
-               for k,v in output_instances.items()];
-
-
-    ################################################################################
-    ############################# get batch embedding ##############################
     # Initial model instance
     model = Seq2SeqAgent(
         config=config, run_id=None,  
@@ -135,7 +144,15 @@ if __name__ == "__main__":
     model.load_checkpoint(PATH_CHECKPOINT + '/model/checkpoint.pt')
     model.model.eval();
 
-    #### Todo ####
+    # Create args and load data based on the config 
+    data = load_dataset(config, PATH_DATA)
+
+    get_vectors = InstanceProcessing(model, config, PATH_PRETRAINED, device)
+
+    # Input instance
+    input_instances =  [
+        'Test1: A black Honda motorcycle parked in front of a garage.',
+        'test11: A black Honda motorcycle parked in front of a garage.']
+
+    sent_emb = get_vectors(input_instances)
     pdb.set_trace()
-    encoding_pooled_list = model.get_instance_vector(output_instances)
-    print(encoding_pooled_list)
