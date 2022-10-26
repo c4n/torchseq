@@ -142,7 +142,7 @@ if __name__ == "__main__":
 
     # Load the checkpoint
     model.load_checkpoint(PATH_CHECKPOINT + '/model/checkpoint.pt')
-    model.model.eval();
+    model.model.eval()
 
     # Create args and load data based on the config 
     data = load_dataset(config, PATH_DATA)
@@ -155,4 +155,5 @@ if __name__ == "__main__":
         'test11: A black Honda motorcycle parked in front of a garage.']
 
     sent_emb = get_vectors(input_instances)
-    pdb.set_trace()
+    print(sent_emb)
+    # pdb.set_trace()

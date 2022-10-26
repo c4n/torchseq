@@ -48,19 +48,37 @@ def load_dataset(config, path_data):
 
 
 class InstanceProcessing:
-    def __init__(self, model, config, path_vocab, device) -> None:
+    def __init__(self, 
+            path_vocab, path_pretrained, 
+            path_checkpoint, device) -> None:
+        
+        # Load config
+        self.config = load_model_config(path_checkpoint + '/config.json')
+        
+        # Initial model instance
+        self.model = Seq2SeqAgent(
+                config=self.config, run_id=None,  
+                output_path=None, data_path=path_pretrained, 
+                silent=False, verbose=False, 
+                training_mode=False)
+        
+        # Load the checkpoint
+        self.model.load_checkpoint(
+            path_checkpoint + '/model/checkpoint.pt')
+        self.model.model.eval()
+
         self.device = device
-        self.tok_window = config.prepro.tok_window
-        self.fields = config.json_dataset.data["field_map"]
-        self.input_tokenizer = Tokenizer(config.prepro.get_first(["input_tokenizer", "tokenizer"]), path_vocab)
-        self.output_tokenizer = Tokenizer(config.prepro.get_first(["output_tokenizer", "tokenizer"]), path_vocab)
-        self.include_lang_codes = config.prepro.data.get("include_lang_codes", False)
-        self.drop_target_lang_codes = config.prepro.data.get("drop_target_lang_codes", False)
-        self.mask_prob = config.prepro.data.get("token_mask_prob", 0)
+        self.tok_window = self.config.prepro.tok_window
+        self.fields = self.config.json_dataset.data["field_map"]
+        self.input_tokenizer = Tokenizer(self.config.prepro.get_first(["input_tokenizer", "tokenizer"]), path_vocab)
+        self.output_tokenizer = Tokenizer(self.config.prepro.get_first(["output_tokenizer", "tokenizer"]), path_vocab)
+        self.include_lang_codes = self.config.prepro.data.get("include_lang_codes", False)
+        self.drop_target_lang_codes = self.config.prepro.data.get("drop_target_lang_codes", False)
+        self.mask_prob = self.config.prepro.data.get("token_mask_prob", 0)
         self.pad_id = self.input_tokenizer.pad_id
-        self.model = model
 
     def __call__(self, data):
+
         batch = []
         for index, instance in enumerate(data):
             instance = self._instance_input(instance)
@@ -131,43 +149,22 @@ class InstanceProcessing:
         return (val)
 
 
-def main(args):
-    # Load config
-    config = load_model_config(args.path_checkpoint + '/config.json')
-
-    # Initial model instance
-    model = Seq2SeqAgent(
-        config=config, run_id=None,  
-        output_path=None, data_path=args.path_pretrained, 
-        silent=False, verbose=False, 
-        training_mode=False)
-
-    # Load the checkpoint
-    model.load_checkpoint(args.path_checkpoint + '/model/checkpoint.pt')
-    model.model.eval()
+if __name__ == "__main__":
 
     # processing and get embedding
-    get_vectors = InstanceProcessing(model, config, args.path_pretrained, args.device)
+    path_vocab = "../data/"
+    path_pretrained = "../data/"
+    path_checkpoint = "../runs/vae/20220920_232720_paraphrasing_vae_mscoco_789"
+    device = "cpu"
+    get_vectors = InstanceProcessing(path_vocab, path_pretrained, path_checkpoint, device)
 
-  
-    sent_eval = STSEval(get_vectors, args.path_sts_data)
-
-    results = sent_eval(args.transfer_tasks)
-    return results
-
-if __name__ == "__main__":
-    class Args:
-        # sta eval
-        transfer_tasks = ['STS12']
-        # transfer_tasks = ['STS12', 'STS13', 'STS14', 'STS15', 'STS16', 'SST2', 'SST5', 'STSBenchmark']
-        path_sts_data = '/home/weerayut/Workspace/projects/SentEval/data'
-        # embedding
-        device = 'cpu'
-        path_pretrained = "../data/"
-        path_checkpoint = '../runs/vae/20220920_232720_paraphrasing_vae_mscoco_789'
-    
-    results = main(Args())
-    pdb.set_trace()
+    # Input instance
+    input_instances =  [
+        'Test1: A black Honda motorcycle parked in front of a garage.',
+        'test11: A black Honda motorcycle parked in front of a garage.']
+    sent_emb = get_vectors(input_instances)
+    print(sent_emb)
+    # pdb.set_trace()
 
 
 
