@@ -852,6 +852,38 @@ class ModelAgent(BaseAgent):
 
         return all_pooled
 
+    def get_vector_batch(self, batch, memory_keys_to_return=None, metric_hooks=[], use_test=False, training_loop=False):
+        """
+        Get that vector
+        """
+        test_loss = 0
+        pred_output = []
+        gold_output = []
+        gold_input = []  # needed for SARI
+        
+        all_pooled = []
+
+        memory_values_to_return = defaultdict(lambda: [])
+
+        self.vq_codes = defaultdict(lambda: [])
+
+        self.model.eval()
+
+        for hook in metric_hooks:
+            hook.on_begin_epoch(use_test)
+
+        with torch.no_grad():
+
+            batch = {k: (v.to(self.device) if k[-5:] != "_text" and k[0] != "_" else v) for k, v in batch.items()}
+
+            curr_batch_size = batch[[k for k in batch.keys() if k[-5:] != "_text"][0]].size()[0]
+
+            encoding_pooled = self.step_getvec(batch)
+
+
+        return encoding_pooled
+
+
     def step_getvec(self, batch):
         """
         Perform a single inference step

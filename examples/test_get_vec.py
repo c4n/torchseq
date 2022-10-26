@@ -47,5 +47,6 @@ instance.model.eval()
     
 # Finally, run inference
 data_loader = JsonDataLoader(config, test_samples=examples, data_path=DATA_PATH)
-encoding_pooled_list = instance.get_vector(data_loader.test_loader)
-print(encoding_pooled_list)
+batch = [batch for batch in data_loader.test_loader][0]
+encoding_pooled = instance.get_vector_batch(batch)
+print(encoding_pooled)
